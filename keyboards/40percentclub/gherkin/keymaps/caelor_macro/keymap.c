@@ -24,6 +24,9 @@
 #define SERIAL_SYNC_RETRIES 10
 #define SER_OUT_RESET 0
 
+
+#define IDLE_TIMEOUT 3600
+
 /*
  * QMK <-> ESPHome Protocol
  * 
@@ -109,6 +112,9 @@ enum custom_keycodes {
 
 static bool host_is_asleep;
 static uint32_t ticks_since_last_heartbeat;
+
+static uint8_t idle_timer;
+static uint16_t idle_seconds;
 
 const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
 
@@ -209,6 +215,29 @@ uint8_t serial_rx(void) {
 }
 
 
+void reset_idle_timer(void) {
+  if (!rgblight_is_enabled()) {
+    rgblight_enable_noeeprom();
+  }
+
+  idle_timer = timer_read();
+  idle_seconds = 0;
+}
+
+void idle_timer_tick(void) {
+  if (!rgblight_is_enabled()) { return; }
+
+  if (timer_elapsed(idle_timer) >= 1000) {
+    idle_seconds++;
+    idle_timer = timer_read();
+  }
+
+  if (idle_seconds >= IDLE_TIMEOUT) {
+    rgblight_disable_noeeprom();
+  }
+}
+
+
 void keyboard_pre_init_user(void) {
   // Call the keyboard pre init code.
   rgblight_set_layer_state(0, true);
@@ -228,6 +257,8 @@ void keyboard_post_init_user(void) {
   print("Initialising serial comms with ESPHome\n");
   SERIAL_UART_INIT();
   ticks_since_last_heartbeat = 0;
+
+  reset_idle_timer();
 }
 
 
@@ -248,6 +279,8 @@ bool led_update_user(led_t led_state) {
   writePin(B0, !led_state.caps_lock);
   writePin(D5, !led_state.num_lock);
 
+  reset_idle_timer();
+
   return true;
 }
 
@@ -265,6 +298,8 @@ layer_state_t layer_state_set_user(layer_state_t state) {
 
 
 void matrix_scan_user(void) {
+  idle_timer_tick();
+
   ticks_since_last_heartbeat++;
   if (ticks_since_last_heartbeat > SERIAL_HEARTBEAT_TIMEOUT) {
     print("Heartbeat timeout from ESPHome. Sending sync request\n");
@@ -314,6 +349,8 @@ void matrix_scan_user(void) {
 
 
 bool process_record_user(uint16_t keycode, keyrecord_t *record) {
+  reset_idle_timer();
+
   if (record->event.pressed) {
     switch(keycode) {
       case HA_SW1:
